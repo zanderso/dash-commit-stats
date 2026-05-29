@@ -9,76 +9,25 @@ import 'dart:io' as io;
 import 'package:args/args.dart';
 import 'package:github/github.dart' as g;
 
-// Add your github token here.
-const String githubApiKey = 'ADD YOUR API KEY HERE';
-
-const List<String> flutterRepos = <String>[
-  'flutter/flutter',
-  'flutter/packages',
-  'flutter/cocoon',
-  'flutter/flutter-intellij',
-  'flutter/devtools',
-  'flutter/tests',
-  'flutter/website',
-
-  // Excluding these due to massive import and deletion PRs.
-  //'flutter/samples',
-  //'flutter/demos',
-  //'flutter/codelabs',
-  //'flutter/ai',
-];
-
-const List<String> dartRepos = <String>[
-  'dart-lang/ai',
-  'dart-lang/sdk',
-  'dart-lang/web',
-  'dart-lang/source_gen',
-  'dart-lang/labs',
-  'dart-lang/i18n',
-  'dart-lang/pub',
-  'dart-lang/setup-dart',
-  'dart-lang/webdev',
-  'dart-lang/site-www',
-  'dart-lang/native',
-  'dart-lang/pub-dev',
-  'dart-lang/build',
-  'dart-lang/dartbug.com',
-  'dart-lang/dart-pad',
-  'dart-lang/homebrew-dart',
-  'dart-lang/mockito',
-  'dart-lang/core',
-  'dart-lang/tools',
-  'dart-lang/sample-pop_pop_win',
-  'dart-lang/dart_style',
-  'dart-lang/pana',
-  'dart-lang/test',
-  'dart-lang/dartdoc',
-  'dart-lang/ecosystem',
-  'dart-lang/flute',
-  'dart-lang/dart_ci',
-  'dart-lang/dart-docker',
-  'dart-lang/repo_manager',
-  'dart-lang/site-shared',
-  'dart-lang/chocolatey-packages',
-  'dart-lang/leak_tracker',
-  'dart-lang/http',
-  'dart-lang/shelf',
-  'dart-lang/grpc_cronet',
-  'dart-lang/dart-syntax-highlight',
-  'dart-lang/dart-lang.github.io',
-];
-
-const List<String> bots = <String>[
-  'skia-flutter-autoroll',
-  'engine-flutter-autoroll',
-  'fluttergithubbot',
-  'dependabot[bot]',
-  'flutter-pub-roller-bot',
-  'auto-submit[bot]',
-  'github-actions[bot]',
-  'flutteractionsbot',
-  'DartDevtoolWorkflowBot',
-];
+// Usage:
+//
+// $ dart bin/dash_commit_counts.dart -c config.json -o output.jsonl
+//
+// Pass a config.json file using the -c option to specify which commits to pull.
+//
+// {
+//     "token": "Your GitHub token",
+//     "since": "2026-05-21",
+//     "until": "2026-05-27",
+//     "repos": [
+//         "flutter/flutter",
+//         ...
+//     ],
+//     "bots": [
+//         "gemini-code-assist[bot]",
+//         ...
+//     ]
+// }
 
 ArgParser buildParser() {
   return ArgParser()
@@ -94,10 +43,110 @@ ArgParser buildParser() {
       negatable: false,
       help: 'Show additional command output.',
     )
-    ..addFlag('dart', negatable: false, help: 'Analyze the dart-lang repos', defaultsTo: false)
-    ..addOption('members', help: 'Members list file. One github user id per line.')
-    ..addOption('output', help: 'Where to write summary CSV data', mandatory: true)
-    ..addOption('raw-output', help: 'Where to write raw pull request json data', mandatory: true);
+    ..addOption(
+      'config',
+      abbr: 'c',
+      help: 'Path of the configuration file.',
+      mandatory: true,
+    )
+    ..addOption(
+      'output',
+      abbr: 'o',
+      help: 'Where to write raw commit json data',
+      mandatory: true,
+    );
+}
+
+class Config {
+  Config._({
+    required this.token,
+    required this.repos,
+    required this.bots,
+    required this.since,
+    required this.until,
+  });
+
+  static (Config?, String?) fromFile(String path) {
+    final io.File configFile = io.File(path);
+    final Map<String, dynamic> configData;
+    try {
+      configData = json.decode(configFile.readAsStringSync());
+    } on FormatException catch (e) {
+      return (null, '$path is not valid json: $e');
+    }
+
+    if (configData[tokenKey] == null ||
+        configData[tokenKey] is! String ||
+        (configData[tokenKey] as String).isEmpty) {
+      return (null, '"token" field must be a non-empty string.');
+    }
+    final String token = configData['token'] as String;
+
+    if (configData[sinceKey] == null ||
+        configData[sinceKey] is! String ||
+        (configData[sinceKey] as String).isEmpty) {
+      return (null, '"since" field must be a non-empty string.');
+    }
+    final String sinceStr = configData[sinceKey] as String;
+    final DateTime since;
+    try {
+      since = DateTime.parse(sinceStr);
+    } on FormatException catch (e) {
+      return (null, '$sinceStr is not a valid date string: $e');
+    }
+
+    if (configData[untilKey] == null ||
+        configData[untilKey] is! String ||
+        (configData[untilKey] as String).isEmpty) {
+      return (null, '"until" field must be a non-empty string.');
+    }
+    final String untilStr = configData[untilKey] as String;
+    final DateTime until;
+    try {
+      until = DateTime.parse(untilStr);
+    } on FormatException catch (e) {
+      return (null, '$untilStr is not a valid date string: $e');
+    }
+  
+    if (configData[reposKey] == null ||
+        configData[reposKey] is! List<dynamic> ||
+        (configData[reposKey] as List<dynamic>).isEmpty) {
+      return (null, '"repos" field must be a non-empty list of strings.');
+    }
+    final List<String> repos = (configData[reposKey] as List<dynamic>).cast<String>();
+  
+    if (configData[botsKey] == null ||
+        configData[botsKey] is! List<dynamic> ||
+        (configData[botsKey] as List<dynamic>).isEmpty) {
+      return (null, '"bots" field must be a non-empty list of strings.');
+    }
+    final List<String> bots = (configData[botsKey] as List<dynamic>).cast<String>();
+  
+    return (Config._(
+      token: token,
+      since: since,
+      until: until,
+      repos: repos,
+      bots: bots,
+    ), null);
+  }
+
+  final String token;
+  final List<String> repos;
+  final List<String> bots;
+  final DateTime since;
+  final DateTime until;
+
+  static const String tokenKey = 'token';
+  static const String sinceKey = 'since';
+  static const String untilKey = 'until';
+  static const String reposKey = 'repos';
+  static const String botsKey = 'bots';
+
+  @override
+  String toString() {
+    return 'Config($token, $repos, $bots, $since, $until)';
+  }
 }
 
 void printUsage(ArgParser argParser) {
@@ -105,11 +154,12 @@ void printUsage(ArgParser argParser) {
   print(argParser.usage);
 }
 
+bool gVerbose = false;
+
 void main(List<String> arguments) async {
   final ArgParser argParser = buildParser();
   try {
     final ArgResults results = argParser.parse(arguments);
-    bool verbose = false;
 
     // Process the parsed arguments.
     if (results.flag('help')) {
@@ -117,33 +167,48 @@ void main(List<String> arguments) async {
       return;
     }
     if (results.flag('verbose')) {
-      verbose = true;
+      gVerbose = true;
     }
 
-    if (verbose) {
+    if (gVerbose) {
       print('[VERBOSE] All arguments: ${results.arguments}');
     }
-  
-    final Set<String> members;
-    if (results.wasParsed('members')) {
-      final io.File membersCsvFile = io.File(results.option('members') as String);
-      members = findMembers(membersCsvFile);
-    } else {
-      members = <String>{};
+
+    final Config? config;
+    switch (Config.fromFile(results.option('config') as String)) {
+      case (_, String msg): {
+        print(msg);
+        print('');
+        printUsage(argParser);
+        io.exitCode = 1;
+        return;
+      }
+      case (Config c, _): {
+        config = c;
+      }
+      default: {
+        config = null;
+      }
     }
-    final io.File outputCsvFile = io.File(results.option('output') as String);
-    final io.File rawOutputJson = io.File(results.option('raw-output') as String);
-  
-    final (Map<String, List<g.RepositoryCommit>>, Map<String, List<g.RepositoryCommit>>) countMaps;
-    // Fetch data and write to the file.
-    countMaps = await downloadCommitData(
-      repos: results.flag('dart') ? dartRepos : flutterRepos,
-      memberIDs: members,
-      after: DateTime.utc(2025),
-    );
 
-    processCommits(countMaps, outputCsvFile, rawOutputJson);
+    if (gVerbose) {
+      print(config);
+    }
 
+    final List<g.RepositoryCommit> commits = await downloadCommitData(config!);
+
+    if (gVerbose) {
+      print('[VERBOSE] Done downloading commit data.');
+    }
+
+    if (commits.isEmpty) {
+      print('No commits found!');
+      io.exitCode = 1;
+      return;
+    }
+
+    final rawOutputJson = io.File(results.option('output') as String);
+    writeCommits(commits, rawOutputJson);
   } on FormatException catch (e) {
     // Print usage information if an invalid argument was provided.
     print(e.message);
@@ -152,97 +217,23 @@ void main(List<String> arguments) async {
   }
 }
 
-void processCommits(
-  (Map<String, List<g.RepositoryCommit>>, Map<String, List<g.RepositoryCommit>>) countMaps,
-  io.File outputCsvFile,
+void writeCommits(
+  List<g.RepositoryCommit> commits,
   io.File rawOutputJson,
 ) {
-  final Map<String, List<g.RepositoryCommit>> memberCommits = countMaps.$1;
-  final Map<String, List<g.RepositoryCommit>> externalCommits = countMaps.$2;
-
-  int memberCommitcount = 0;
-  int memberAdditions = 0;
-  int memberDeletions = 0;
-  for (final String id in memberCommits.keys) {
-    final List<g.RepositoryCommit> commits = memberCommits[id]!;
-    memberCommitcount += commits.length;
-    int additions = 0;
-    int deletions = 0;
-    for (final g.RepositoryCommit commit in commits) {
-      if ((commit.stats?.additions ?? 0) > 100000 || (commit.stats?.deletions ?? 0) > 100000) {
-        print('LARGE PR: ${commit.htmlUrl} from $id');
-      }
-      additions += commit.stats?.additions ?? 0;
-      deletions += commit.stats?.deletions ?? 0;
-    }
-    memberAdditions += additions;
-    memberDeletions += deletions;
-    outputCsvFile.writeAsStringSync(
-      '$id,${commits.length},$additions,$deletions\n',
-      mode: io.FileMode.append,
-      flush: true,
-    );
+  if (gVerbose) {
+    print('[VERBOSE] Writing out raw commit data.');
   }
 
-  outputCsvFile.writeAsStringSync(',,,\n', mode: io.FileMode.append, flush: true);
-
-  int externalCommitcount = 0;
-  int externalAdditions = 0;
-  int externalDeletions = 0;
-  for (final String id in externalCommits.keys) {
-    final List<g.RepositoryCommit> commits = externalCommits[id]!;
-    externalCommitcount += commits.length;
-    int additions = 0;
-    int deletions = 0;
-    for (final g.RepositoryCommit commit in commits) {
-      if ((commit.stats?.additions ?? 0) > 100000 || (commit.stats?.deletions ?? 0) > 100000) {
-        print('LARGE PR: ${commit.htmlUrl} from $id');
-      }
-      additions += commit.stats?.additions ?? 0;
-      deletions += commit.stats?.deletions ?? 0;
-    }
-    externalAdditions += additions;
-    externalDeletions += deletions;
-    outputCsvFile.writeAsStringSync(
-      '$id,${commits.length},$additions,$deletions\n',
-      mode: io.FileMode.append,
-      flush: true,
-    );
+  for (final g.RepositoryCommit commit in commits) {
+    final StringBuffer b = StringBuffer();
+    b.writeln(jsonEncode(commit.toJson()));
+    rawOutputJson.writeAsStringSync(b.toString(), flush: true, mode: io.FileMode.append);
   }
-
-  print('Members: ${memberCommits.length}');
-  print('nonMembers: ${externalCommits.length}');
-  print('Member PR count: $memberCommitcount');
-  print('nonMember PR count: $externalCommitcount');
-  print('Member additions: $memberAdditions');
-  print('nonMember additions: $externalAdditions');
-  print('Member deletions: $memberDeletions');
-  print('nonMember deletions: $externalDeletions');
-
-  final List<Map<String, dynamic>> json = [];
-  for (final String id in memberCommits.keys) {
-    final List<g.RepositoryCommit> commits = memberCommits[id]!;
-    for (final g.RepositoryCommit commit in commits) {
-      json.add(commit.toJson());
-    }
-  }
-  for (final String id in externalCommits.keys) {
-    final List<g.RepositoryCommit> commits = externalCommits[id]!;
-    for (final g.RepositoryCommit commit in commits) {
-      json.add(commit.toJson());
-    }
-  }
-  rawOutputJson.writeAsStringSync(jsonEncode(json), flush: true);
 }
 
-Set<String> findMembers(io.File membersCsvFile) {
-  final Set<String> members = <String>{};
-  final List<String> membersLines = membersCsvFile.readAsLinesSync();
-  members.addAll(membersLines);
-  return members;
-}
-
-Future<T> callWithRetries<T>( // ignore: body_might_complete_normally
+Future<T> callWithRetries<T>(
+  // ignore: body_might_complete_normally
   Future<T> Function() f, {
   int retries = 5,
 }) async {
@@ -262,46 +253,72 @@ Future<T> callWithRetries<T>( // ignore: body_might_complete_normally
 }
 
 // Do not exceed 5000 requests in an hour.
-Future<void> pauseForRateLimit(g.GitHub github) async {
+Future<void> pauseForRateLimit(
+  g.GitHub github, [
+  int? remainingRequests,
+]) async {
   final int? total = github.rateLimitLimit;
-  final int? remaining = github.rateLimitRemaining;
+  final int? remainingQuota = github.rateLimitRemaining;
   final DateTime? reset = github.rateLimitReset;
 
   // We won't be able to figure this out without this data, so
   // don't wait. Maybe the data will show up before the next
   // request.
-  if (total == null || remaining == null || reset == null) {
+  if (total == null || remainingQuota == null || reset == null) {
+    return;
+  }
+
+  // If the remaining requests are fewer than the remaining quota
+  // then don't wait.
+  if (remainingRequests != null && remainingRequests < remainingQuota) {
     return;
   }
 
   final Duration timeUntilReset = reset.difference(DateTime.now());
+  if (timeUntilReset.isNegative) {
+    // If the time until reset is in the past, then don't wait.
+    return;
+  }
 
   // Don't exceed `remaining` requests within the `timeUntilReset`
   // duration.
   final int millis = timeUntilReset.inMilliseconds;
   // Evenly divide up the remain time among the remaining quota.
-  final double delayInMillis = remaining == 0 ? millis.toDouble() : millis / remaining;
-  print('Rate limit: Waiting ${delayInMillis.ceil()} ms. '
-        '($remaining/$total) reset in: $timeUntilReset');
+  final double delayInMillis = remainingQuota == 0
+      ? millis.toDouble()
+      : millis / remainingQuota;
+  if (delayInMillis < 1.0) {
+    // If the delay is less than a millisecond, then don't wait.
+    return;
+  }
+
+  print(
+    'Rate limit: Waiting ${delayInMillis.ceil()} ms. '
+    '($remainingQuota/$total) reset in: $timeUntilReset',
+  );
   return Future.delayed(Duration(milliseconds: delayInMillis.ceil()));
 }
 
 Future<g.RepositoryCommit?> getCommit(
   g.RepositoriesService service,
   String repo,
-  String? sha
-) async {
+  String? sha, {
+  int? remainingRequests,
+}) async {
   if (sha == null) {
     return null;
   }
   try {
     return await callWithRetries(() async {
       final g.RepositorySlug slug = g.RepositorySlug.full(repo);
-      await pauseForRateLimit(service.github);
+      await pauseForRateLimit(service.github, remainingRequests);
+      if (gVerbose) {
+        print('[VERBOSE] getting $sha from $repo');
+      }
       return service.getCommit(slug, sha);
     }, retries: 5);
   } catch (e) {
-    print('Error: $e');
+    print('Failed to get commit: Error: $e');
     return null;
   }
 }
@@ -309,22 +326,27 @@ Future<g.RepositoryCommit?> getCommit(
 Future<List<g.RepositoryCommit>> getCommits(
   g.RepositoriesService service,
   String repo,
-  DateTime after,
-) async {
+  DateTime after, 
+  DateTime before, {
+  int? remainingRequests,
+}) async {
   return callWithRetries(() async {
     final List<g.RepositoryCommit> commits = <g.RepositoryCommit>[];
     final g.RepositorySlug slug = g.RepositorySlug.full(repo);
-    await pauseForRateLimit(service.github);
-    final StreamSubscription<g.RepositoryCommit> sub = service.listCommits(
-      slug,
-      since: after,
-    ).listen(
-      (g.RepositoryCommit commit) async {
-        commits.add(commit);
-      },
-    );
+    await pauseForRateLimit(service.github, remainingRequests);
+    if (gVerbose) {
+      print('[VERBOSE] Listing commits of $repo');
+    }
+    final StreamSubscription<g.RepositoryCommit> sub = service
+        .listCommits(slug, since: after, until: before)
+        .listen((g.RepositoryCommit commit) async {
+          commits.add(commit);
+        });
     try {
       await sub.asFuture();
+      if (gVerbose) {
+        print('[VERBOSE] commit list stream for $repo completed');
+      }
     } catch (e) {
       try {
         await sub.cancel();
@@ -337,72 +359,60 @@ Future<List<g.RepositoryCommit>> getCommits(
   }, retries: 5);
 }
 
-// The first element of the return tuple is the list of commits for each member.
-// The second element is the list of commits for each non-member.
-Future<(Map<String, List<g.RepositoryCommit>>,
-        Map<String, List<g.RepositoryCommit>>)> downloadCommitData({
-  required List<String> repos,
-  required Set<String> memberIDs,
-  required DateTime after,
-}) async {
+Future<List<g.RepositoryCommit>> downloadCommitData(Config config) async {
   final g.GitHub github = g.GitHub(
-    auth: g.Authentication.withToken(githubApiKey),
+    auth: g.Authentication.withToken(config.token),
   );
   final g.RepositoriesService service = g.RepositoriesService(github);
 
-  final Map<String, List<g.RepositoryCommit>> memberCommits = <String, List<g.RepositoryCommit>>{};
-  final Map<String, List<g.RepositoryCommit>> externalCommits = <String, List<g.RepositoryCommit>>{};
-  for (final String repo in repos) {
-    io.stdout.write('Downloading commit data for "$repo"');
-    //await io.stdout.flush();
-    final List<g.RepositoryCommit> partialCommits;
-    final List<g.RepositoryCommit> commits = [];
+  // Get all the partial commits for all the repos before requesting the complete data.
+  final Map<String, List<g.RepositoryCommit>> partialCommits = {};
+  for (final String repo in config.repos) {
+    io.stdout.write('Downloading commit data for "$repo"\n');
     try {
-      partialCommits = await getCommits(service, repo, after);
-      for (final g.RepositoryCommit commit in partialCommits) {
-        final g.RepositoryCommit? fullCommit = await getCommit(service, repo, commit.sha);
-        if (fullCommit == null) {
-          continue;
-        }
-        commits.add(fullCommit);
-      }
+      partialCommits[repo] = await getCommits(service, repo, config.since, config.until);
     } catch (e) {
       print('\nFailed to get commits for $repo: Error: $e');
       print(
         '\nrateLimitLimit: ${github.rateLimitLimit} '
-        'rateLimitRemaining: ${github.rateLimitRemaining} '
-        'rateLimitReset: ${github.rateLimitReset!.toLocal()}',
+        '\nrateLimitRemaining: ${github.rateLimitRemaining} '
+        '\nrateLimitReset: ${github.rateLimitReset!.toLocal()}',
       );
-      break;
+      return <g.RepositoryCommit>[];
     }
-    for (final g.RepositoryCommit commit in commits) {
-      if (commit.author == null || commit.author!.login == null) {
-        continue;
-      }
-
-      final String id = commit.author!.login!;
-      if (bots.contains(id)) {
-        continue;
-      }
-
-      if (memberIDs.contains(id)) {
-        memberCommits.update(
-          id,
-          (List<g.RepositoryCommit> l) => l..add(commit),
-          ifAbsent: () => <g.RepositoryCommit>[commit],
-        );
-      } else {
-        externalCommits.update(
-          id,
-          (List<g.RepositoryCommit> l) => l..add(commit),
-          ifAbsent: () => <g.RepositoryCommit>[commit],
-        );
-      }
-    }
-    io.stdout.write(': Done.\n');
-    // Vague attempt to avoid rate limiting.
-    await Future.delayed(const Duration(minutes: 1));
   }
 
-  return (memberCommits, externalCommits);
+  final List<g.RepositoryCommit> fullCommits = [];
+  final int commitCount = partialCommits.values.fold(0, (c, l) => c + l.length);
+  if (gVerbose) {
+    print('[VERBOSE] Downloading full data for $commitCount commits');
+  }
+  for (final String repo in partialCommits.keys) {
+    final List<g.RepositoryCommit> repoCommits = partialCommits[repo]!;
+    if (gVerbose) {
+      print('[VERBOSE] ${commitCount - fullCommits.length} commits remaining.');
+    }
+    for (final g.RepositoryCommit commit in repoCommits) {
+      final int remainingCommits = commitCount - fullCommits.length;
+      final g.RepositoryCommit? fullCommit = await getCommit(
+        service,
+        repo,
+        commit.sha,
+        remainingRequests: remainingCommits,
+      );
+      if (fullCommit == null) {
+        continue;
+      }
+      fullCommits.add(fullCommit);
+    }
+  }
+
+  if (gVerbose) {
+    print('[VERBOSE] Got all commit data');
+  }
+
+  return fullCommits.where((g.RepositoryCommit commit) {
+    final String id = commit.author!.login!;
+    return !config.bots.contains(id);
+  }).toList();
 }
